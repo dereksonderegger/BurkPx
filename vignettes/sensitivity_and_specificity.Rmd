@@ -1,0 +1,115 @@
+---
+title: "Sensitivity and Specificity"
+author: "Derek Sonderegger"
+date: "`r Sys.Date()`"
+#output: rmarkdown::word_document
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Sensitivity and Specificity}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE
+)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# library(devtools)
+# install_github('dereksonderegger/BurkPx')  # only need to do this once...
+library(BurkPx)
+library(ggplot2)
+```
+
+
+# Human ROC analysis on Human models
+*Note to self:  I need to ask Erik for a description of the human trials we used so as to 
+document what data we used to fit the models.*
+
+The models were fit using all of the time points. If an individual had multiple time points,
+we only used one time point (randomly selected). The models we are using were fit using 
+cross-validation so they shouldn't be overfitting
+the data too much, but in the analysis we are about to do, we are using the _same data_ as
+we used to create the models.  Ideally, we would have a separate validation set at some point.
+
+## Model Selection
+To assess how well the models work, we will look at the Area Under the Curve (AUC) for the 
+Reciever-Operator Curve (ROC). To generate this by week, We take the human data and split it 
+into Healthy, Week 1, Week 2, etc. For each of the Weeks, we calculate probability of infection 
+for the the Healthy and Infected groups using the six different human models. 
+
+```{r}
+#################################################
+##            ROC for each model               ##
+#################################################
+AUC_results <- NULL
+for(time in c('Week1','Week2','Week3', 'Week4+')){
+  for(method in c('LASSO', 'Ridge')){
+    for(type in c('IgM', 'IgG', 'IgGM')){
+      if( type %in% c('IgM', 'IgG') ){
+        df <- Human_BurkPx %>%
+          filter(Type == type) %>% filter(TimeGroup %in% c('Healthy', time)) %>%
+          spread(Antigen, Value) %>%
+          group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+          group_by() %>% select(-PatientID, -TimeGroup, -Type, -Rep) %>% complete()
+      }else{
+        df <- Human_BurkPx %>%
+          group_by(PatientID, Type, Rep) %>%
+          unite( 'Antigen', Type, Antigen ) %>%
+          spread(Antigen, Value) %>%
+          group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+          group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+      }
+
+      df$p <- predict(models[[str_c('Human_',type,'_',method)]], 
+                      newdata=df, na.action = na.pass) %>% 
+              as.vector()
+      temp <- pROC::roc(Status ~ p, data=df)
+      AUC_results <- AUC_results %>%
+        rbind( data.frame(Type = type, TimeGroup=time, method=method, AUC=pROC::auc(temp) ) )
+    }
+  }
+}
+#AUC_results %>% arrange(TimeGroup, desc(AUC))
+```
+
+
+
+```{r, fig.width=7}
+ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
+  geom_point() + facet_grid(.~Type) + geom_line(aes(x=as.numeric(TimeGroup)))
+```
+
+From this analysis, it is clear that for the first week, we need both the IgG and IgM sereologies. It also is
+clear that the LASSO is working better than Ridge Regression and that IgG is working better than IgM. However the
+best performance is by the IgGM data which uses both IgG and IgM observation values.
+
+
+## How many covariates are used?
+```{r}
+# the models object is a list of all the models I created.  The naming convention
+# follows the following convention: Human_IgGM_LASSO.  Species_AntigenList_Method
+
+# Which covariates are used in the IgG LASSO model?
+temp <- coef( models$Human_IgG_LASSO ) 
+data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
+  filter(Antigen != '(Intercept)', Coef != 0 ) 
+
+# Which covariates are used in the IgGM LASSO model?
+temp <- coef( models$Human_IgGM_LASSO ) 
+data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
+  filter(Antigen != '(Intercept)', Coef != 0 ) 
+
+# Of those, which are used in both IgG and IgM?
+data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
+  filter(Antigen != '(Intercept)', Coef != 0 ) %>%
+  separate(Antigen, into=c('Type','Antigen'), extra='merge') %>%
+  group_by(Antigen) %>% arrange(Antigen) %>% count()
+
+
+
+```
+
+
