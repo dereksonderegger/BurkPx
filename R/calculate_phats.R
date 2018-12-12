@@ -62,7 +62,7 @@ calculate_phats <- function(data_in, file_out=NULL,
     if( str_detect(data_in, fixed('.csv')) ){
       data <- read.csv(data_in)
     }else{
-      data <- read_excel(data_in)
+      data <- readxl::read_excel(data_in)
     }
   }else{
     data <- data_in

@@ -10,7 +10,7 @@ Description: Burkholderia is pathogenic bacteria which causes the disease melioi
     the statistical model(s) to take the observed antigen values and produce a 
     probability that the patient has meliodosis.
 Depends: R (>= 2.4.0), tidyr, dplyr, stringr, glmnetUtils, ggplot2
-Requires: pROC
+Requires: pROC, readxl
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
