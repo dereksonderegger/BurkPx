@@ -50,8 +50,10 @@
 #'          function will still work.
 #'
 #' @export
-calculate_phats <- function(data_in, file_out=NULL,
-            Species = 'Human', Trained_on = 'Full',
+calculate_phats <- function(data_in,
+            file_out=NULL,
+            Species = 'Human',
+            Trained_on = 'Full',
             Isotype = c('IgG', 'IgM', 'IgGM'),
             Method = 'LASSO',
             average_replicates = FALSE,
