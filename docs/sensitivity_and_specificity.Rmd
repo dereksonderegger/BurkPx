@@ -17,8 +17,6 @@ knitr::opts_chunk$set(
 ```
 
 ```{r, warning=FALSE, message=FALSE}
-# I haven't uploaded BurkPx to GitHub yet, but eventually we'll be
-# able to just download the BurkPx package. 
 # library(devtools)                          
 # install_github('dereksonderegger/BurkPx')  
 library(BurkPx)
@@ -27,9 +25,6 @@ library(ggplot2)
 
 
 # Human ROC analysis on Human models
-*Note to self:  I need to ask Erik for a description of the human trials we used so as to 
-document what data we used to fit the models.*
-
 We first split the patients into test/training sets and then fit all the various models (IgG, IgM, IgGM, etc)
 using only patients from the training set.  Because we have 100 Meliod patients, then 50 of those patients get
 assigned to the test group and 50 to the training group.  Likewise of the 400 controls, 200 get assigned to the
@@ -45,9 +40,8 @@ Reciever-Operator Curve (ROC). To generate this by week, We take the human data 
 into Healthy, Week 1, Week 2, etc. For each of the Weeks, we calculate probability of infection 
 for the the Healthy and Infected groups using the six different human models. 
 
-ATPD, imps  : we've run out of these lab supplies...
 
-```{r}
+```{r, Human_ROC_Calculation, echo=FALSE}
 #################################################
 ##            ROC for each model               ##
 #################################################
@@ -75,7 +69,7 @@ for(time in c('Week1','Week2','Week3', 'Week4+')){
           group_by() %>% select(-PatientID, -TimeGroup, -Rep)
       }
 
-      df$p <- predict(models[[str_c('Human_',type,'_',method)]], 
+      df$p <- predict(models[[str_c('Human_Training_',type,'_',method)]], 
                       newdata=df, na.action = na.pass) %>% 
               as.vector()
       temp <- pROC::roc(Status ~ p, data=df)
@@ -93,7 +87,7 @@ for(time in c('Week1','Week2','Week3', 'Week4+')){
 }
 ```
 
-```{r,fig.height=2.5, fig.width=6}
+```{r, Human_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
 ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
   facet_grid(.~Type) + 
   geom_point() + 
@@ -103,11 +97,11 @@ ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
 
 From this analysis, it is clear that for the first week, we need both the IgG and IgM sereologies. It also seems
 that the LASSO is working better than Ridge Regression and that IgG is working better than IgM. However the
-best performance is by the IgGM data which uses both IgG and IgM observation values.
+best performance is by the IgGM data which uses both IgG and IgM observation values. The "Full" graphs are where I used the model fit on both the test and training data to predict the test set. 
 
 
 ## How many covariates are used?
-```{r}
+```{r, echo=FALSE}
 # the models object is a list of all the models I created.  The naming convention
 # follows the following convention: Human_IgGM_LASSO.  Species_AntigenList_Method
 
@@ -130,30 +124,103 @@ data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
 ```
 
 ## What happens to the IgGM model as we decrease the number of covariates.
-```{r}
+```{r, echo=FALSE}
 plot(models$Human_Full_IgGM_LASSO, main='IgGM \n')
 ```
 
 ## What happens to the IgG model as we decrease the number of covariates.
-```{r}
+```{r, echo=FALSE}
 plot(models$Human_Full_IgG_LASSO, main='IgG \n')
 ```
 
 ## What happens to the IgM model as we decrease the number of covariates.
-```{r}
+```{r, echo=FALSE}
 plot(models$Human_Full_IgM_LASSO, main='IgM \n')
 ```
 
 
 I am a little concerned with how large the IgGM model is, but considering our 
 sample sizes..
-```{r}
+```{r, echo=FALSE}
 Human_BurkPx %>%
   group_by(PatientID, Status) %>%
   count() %>% 
   group_by(Status) %>% count() %>%
-  group_by() %>% mutate(perc = nn/sum(nn) )
+  group_by() %>% mutate(perc = n/sum(n) )
 ```
 maybe this isn't a big deal.  The data consists of nearly 500 subjects split 
 80% / 20% between Healthy and Melioid.
 
+
+# Nonhuman Primate
+
+The nonhuman primate data was collected from both the batelle and Tulane information. When I created the testing and training sets, we split the Batelle individual subjects equally into the test and training sets and likewise split the Tulane negative individuals equally into the test and training sets.
+
+```{r, echo=FALSE}
+out <- NHP_BurkPx_train %>%
+  group_by(PatientID, Origin, Status) %>% count() %>%
+  group_by(Origin, Status) %>% count() %>%
+  mutate(Type = 'Training' )
+
+out <- rbind(out, 
+  NHP_BurkPx_test %>%
+  group_by(PatientID, Origin, Status) %>% count() %>%
+  group_by(Origin, Status) %>% count() %>%
+  mutate(Type = 'Test' ))  
+
+out
+```
+
+
+```{r, NHP_ROC_Calculation, echo=FALSE}
+#################################################
+##            ROC for each model               ##
+#################################################
+time = 'Week1'
+method = 'LASSO'
+type = 'IgG'
+
+AUC_results <- NULL
+  for(method in c('LASSO', 'Ridge', 'HCP1')){
+    for(type in c('IgM', 'IgG', 'IgGM')){
+      if( type %in% c('IgM', 'IgG') ){
+        df <- NHP_BurkPx_test %>%
+          filter(Type == type) %>% #filter(TimeGroup %in% c('Healthy', time)) %>%
+          spread(Antigen, Value) %>%
+          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+          group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
+      }else{
+        df <- NHP_BurkPx_test %>%
+          group_by(PatientID, Type, Rep) %>%
+          unite( 'Antigen', Type, Antigen ) %>%
+          #filter(TimeGroup %in% c('Healthy', time)) %>%
+          spread(Antigen, Value) %>%
+          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+          group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+      }
+
+      df$p <- predict(models[[str_c('NHP_Training_',type,'_',method)]], 
+                      newdata=df, na.action = na.pass) %>% 
+              as.vector()
+      temp <- pROC::roc(Status ~ p, data=df)
+      AUC_results <- AUC_results %>%
+        rbind( data.frame(Type = type, Training='Training', method=method, AUC=pROC::auc(temp) ) )
+      
+      df$p <- predict(models[[str_c('NHP_Full_',type,'_',method)]],
+                      newdata=df, na.action=na.pass) %>%
+              as.vector()
+      temp <- pROC::roc(Status ~ p, data=df)
+      AUC_results <- AUC_results %>%
+        rbind( data.frame(Type = type, Training='Full', method=method, AUC=pROC::auc(temp) ) )
+    }
+  }
+```
+
+
+```{r, NHP_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
+ggplot(AUC_results, aes(x=Type, y=AUC, color=method)) +
+  facet_grid(Training ~ .) + 
+  geom_point() + 
+  geom_line(aes(x=as.numeric(Type))) 
+  #theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
+```
