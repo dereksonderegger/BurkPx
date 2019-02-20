@@ -224,3 +224,9 @@ ggplot(AUC_results, aes(x=Type, y=AUC, color=method)) +
   geom_line(aes(x=as.numeric(Type))) 
   #theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
 ```
+
+For the Non-human primates, we see that the models that were trained on only the training data still
+did quite well in predicting the testing set with AUC values in the 90s.  However the models trained
+with both the test and training sets (aka "Full" data), did a better job predicting the testing set,
+as we would expect. Notably, there isn't a huge difference in prediction capabilities and, unlike
+the human data, we see that the IgM serum is better at prediction than the IgG.
