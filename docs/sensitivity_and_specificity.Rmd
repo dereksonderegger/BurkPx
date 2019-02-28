@@ -17,28 +17,21 @@ knitr::opts_chunk$set(
 ```
 
 ```{r, warning=FALSE, message=FALSE}
-# library(devtools)                          
-# install_github('dereksonderegger/BurkPx')  
+# library(devtools)
+# install_github('dereksonderegger/BurkPx')
 library(BurkPx)
 library(ggplot2)
 ```
 
+# Methods
+Our initial research identified 21 differnt antigens that could be predictive of Meliodosis. To create an assay with high sensitivity and specificity for future observations, we created a statistical model using our present data but protected ourselves from overfitting the data by using the *shrinkage methods* LASSO and ridge regression. These methods modify a a conventional linear model by continuously shrinking the model coeffients towards zero and then selecting a shrinkage amount via k-fold cross-validation. LASSO has the convenient property of pushing the regression coeffiencients to zero, effectively removing the antigen from the regression model, while ridge regression typcially will simply push coeffients to just be small. As a result, LASSO tends to produce a more parsimonious set of antigens to base the assay on.
 
 # Human ROC analysis on Human models
-We first split the patients into test/training sets and then fit all the various models (IgG, IgM, IgGM, etc)
-using only patients from the training set.  Because we have 100 Meliod patients, then 50 of those patients get
-assigned to the test group and 50 to the training group.  Likewise of the 400 controls, 200 get assigned to the
-test set and 200 to the training. 
+We first split the human patients into test/training sets and then fit all the various models (IgG, IgM, IgGM, etc) using only patients from the training set.  Because we have 100 Meliod patients, then 50 of those patients get assigned to the test group and 50 to the training group.  Likewise of the 400 controls, 200 get assigned to the test set and 200 to the training. 
 
-Once the patients have been assigned to either the test or training set, all of the patients serologies are
-included in the set.  This means that a single patient with many serologies might have an oversized effect. But
-we did this to try to keep our sample sizes as high as possible.
+Once the patients have been assigned to either the test or training set, all of the patients serologies are included in the set.  This means that a single patient with many serologies might have an oversized effect. But we did this to try to keep our sample sizes as high as possible. We created statistical models using the training set using both LASSO and ridge regression. We will then challenge the models and calculate the Receiver Operator Characteristic (ROC) curves and its Area Under the Curve (AUC) using the testing set. Next we create LASSO and ridge regression models using the full set of data, which we will recommend for making predictions about future observations.
 
-## Model Selection
-To assess how well the models work, we will look at the Area Under the Curve (AUC) for the 
-Reciever-Operator Curve (ROC). To generate this by week, We take the human data and split it 
-into Healthy, Week 1, Week 2, etc. For each of the Weeks, we calculate probability of infection 
-for the the Healthy and Infected groups using the six different human models. 
+For the human data, we generated AUC values for each week after the patient was admitted to the hospital. To generate this by week, we split the testing data into Healthy, Week 1, Week 2, etc. For each, we calculate AUC using the three different human models (IgG, IgM, IgGM). 
 
 
 ```{r, Human_ROC_Calculation, echo=FALSE}
@@ -74,14 +67,16 @@ for(time in c('Week1','Week2','Week3', 'Week4+')){
               as.vector()
       temp <- pROC::roc(Status ~ p, data=df)
       AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, TimeGroup=time, method=method, AUC=pROC::auc(temp) ) )
+        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                          Train = 'Training', AUC=pROC::auc(temp) ) )
       
       df$p <- predict(models[[str_c('Human_Full_',type,'_',method)]],
                       newdata=df, na.action=na.pass) %>%
               as.vector()
       temp <- pROC::roc(Status ~ p, data=df)
       AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = str_c('Full_',type), TimeGroup=time, method=method, AUC=pROC::auc(temp) ) )
+        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                          Train = 'Full', AUC=pROC::auc(temp) ) )
     }
   }
 }
@@ -89,90 +84,97 @@ for(time in c('Week1','Week2','Week3', 'Week4+')){
 
 ```{r, Human_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
 ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
-  facet_grid(.~Type) + 
+  facet_grid(Train ~ Type) + 
   geom_point() + 
   geom_line(aes(x=as.numeric(TimeGroup))) +
-  theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
+  theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
+  labs(title='AUC values: Human Models')
 ```
 
-From this analysis, it is clear that for the first week, we need both the IgG and IgM sereologies. It also seems
-that the LASSO is working better than Ridge Regression and that IgG is working better than IgM. However the
-best performance is by the IgGM data which uses both IgG and IgM observation values. The "Full" graphs are where I used the model fit on both the test and training data to predict the test set. 
+The graph columns denote the serum type and the graph rows represent which dataset the model was trained on. The training row was trained on the training set and tested on the test set. However the full row has models built using both the training and test sets and then challenged by the test set.  
+
+From this analysis, it is clear that for the first week, we need both the IgG and IgM sereologies. It also seems that the LASSO might be working better than Ridge Regression and that IgG is working better than IgM. However the best performance is by the IgGM data which uses both IgG and IgM observation values. 
+
 
 
 ## How many covariates are used?
-```{r, echo=FALSE}
-# the models object is a list of all the models I created.  The naming convention
-# follows the following convention: Human_IgGM_LASSO.  Species_AntigenList_Method
+For each of the full LASSO models, it would be helpful to know which antigens where selected for inclusion into the model.
 
+#### IgG
+```{r, echo=FALSE}
 # Which covariates are used in the IgG LASSO model?
 temp <- coef( models$Human_Full_IgG_LASSO ) 
 data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
-  filter(Antigen != '(Intercept)', Coef != 0 ) 
+  filter(Antigen != '(Intercept)', Coef != 0 ) %>%
+  pander::pander()
+```
 
+#### IgM
+```{r, echo=FALSE}
+# Which covariates are used in the IgM LASSO model?
+temp <- coef( models$Human_Full_IgM_LASSO ) 
+data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
+  filter(Antigen != '(Intercept)', Coef != 0 ) %>%
+  pander::pander()
+```
+
+#### IgGM
+```{r, echo=FALSE}
 # Which covariates are used in the IgGM LASSO model?
 temp <- coef( models$Human_Full_IgGM_LASSO ) 
 data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
-  filter(Antigen != '(Intercept)', Coef != 0 ) 
+  filter(Antigen != '(Intercept)', Coef != 0 ) %>%
+  pander::pander()
+```
 
+#### Both IgG and IgM
+```{r, echo=FALSE}
 # Of those, which are used in both IgG and IgM?
 data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
   filter(Antigen != '(Intercept)', Coef != 0 ) %>%
   separate(Antigen, into=c('Type','Antigen'), extra='merge') %>%
-  group_by(Antigen) %>% arrange(Antigen) %>% count()
+  group_by(Antigen) %>% arrange(Antigen) %>% count() %>%
+  pander::pander()
 
 ```
 
-## What happens to the IgGM model as we decrease the number of covariates.
-```{r, echo=FALSE}
+## What happens as we decrease the number of covariates?
+For the LASSO models, as the shrinkage parameter $\lambda$ increases, the number of non-zero model coefficients decreases. We can examine how the AUC decreases as a function of $\lambda$, and therefore indirectly as a function of number of non-zero model coefficients.  In the following graphs, the numbers along the top of the graph represent the number of non-zero coefficients. The dotted line on the right represents the selected shrinkage value we used for the Full LASSO models.
+```{r, echo=FALSE, fig.height=6.5}
+par(mfrow=c(3,1))
 plot(models$Human_Full_IgGM_LASSO, main='IgGM \n')
-```
-
-## What happens to the IgG model as we decrease the number of covariates.
-```{r, echo=FALSE}
 plot(models$Human_Full_IgG_LASSO, main='IgG \n')
-```
-
-## What happens to the IgM model as we decrease the number of covariates.
-```{r, echo=FALSE}
 plot(models$Human_Full_IgM_LASSO, main='IgM \n')
 ```
 
 
-I am a little concerned with how large the IgGM model is, but considering our 
-sample sizes..
-```{r, echo=FALSE}
-Human_BurkPx %>%
-  group_by(PatientID, Status) %>%
-  count() %>% 
-  group_by(Status) %>% count() %>%
-  group_by() %>% mutate(perc = n/sum(n) )
-```
-maybe this isn't a big deal.  The data consists of nearly 500 subjects split 
-80% / 20% between Healthy and Melioid.
 
 
 # Nonhuman Primate
 
-The nonhuman primate data was collected from both the batelle and Tulane information. When I created the testing and training sets, we split the Batelle individual subjects equally into the test and training sets and likewise split the Tulane negative individuals equally into the test and training sets.
+The nonhuman primate data was collected from both the Batelle and Tulane information. When I created the testing and training sets, we split the Batelle individual subjects equally into the test and training sets and likewise split the Tulane negative individuals equally into the test and training sets. We created two NHP train/test sets. The first version Batelle animals were selected randomly from Batelle animals that survived for the full experiment.  The second training/testing set were created from the complete dataset.
 
+## NHP Version 1
 ```{r, echo=FALSE}
-out <- NHP_BurkPx_train %>%
+out <- NHP_BurkPx_train1 %>%
   group_by(PatientID, Origin, Status) %>% count() %>%
   group_by(Origin, Status) %>% count() %>%
-  mutate(Type = 'Training' )
+  mutate(Type = 'Training' ) 
 
 out <- rbind(out, 
-  NHP_BurkPx_test %>%
+  NHP_BurkPx_test1 %>%
   group_by(PatientID, Origin, Status) %>% count() %>%
   group_by(Origin, Status) %>% count() %>%
   mutate(Type = 'Test' ))  
 
-out
+out %>%
+  pander::pander()
 ```
 
 
-```{r, NHP_ROC_Calculation, echo=FALSE}
+
+We next look at the AUC values for the Testing set based on either the model trained on just the training set vs the model trained on the full Version 1 dataset. Because we would expect the model trained on the test data would perform well on the test set, we should only draw conclusions from the model built from the training set. The only reason the model built from the full dataset exists is to be able to use it on future data. I show these results here just to verify that the full model doesn't do worse than the training model. 
+```{r, NHP_V1_ROC_Calculation, echo=FALSE}
 #################################################
 ##            ROC for each model               ##
 #################################################
@@ -181,45 +183,43 @@ method = 'LASSO'
 type = 'IgG'
 
 AUC_results <- NULL
-  for(method in c('LASSO', 'Ridge', 'HCP1')){
-    for(type in c('IgM', 'IgG', 'IgGM')){
-      if( type %in% c('IgM', 'IgG') ){
-        df <- NHP_BurkPx_test %>%
-          filter(Type == type) %>% #filter(TimeGroup %in% c('Healthy', time)) %>%
-          spread(Antigen, Value) %>%
-          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-          group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
-      }else{
-        df <- NHP_BurkPx_test %>%
-          group_by(PatientID, Type, Rep) %>%
-          unite( 'Antigen', Type, Antigen ) %>%
-          #filter(TimeGroup %in% c('Healthy', time)) %>%
-          spread(Antigen, Value) %>%
-          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-          group_by() %>% select(-PatientID, -TimeGroup, -Rep)
-      }
-
-      df$p <- predict(models[[str_c('NHP_Training_',type,'_',method)]], 
-                      newdata=df, na.action = na.pass) %>% 
-              as.vector()
-      temp <- pROC::roc(Status ~ p, data=df)
-      AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, Training='Training', method=method, AUC=pROC::auc(temp) ) )
-      
-      df$p <- predict(models[[str_c('NHP_Full_',type,'_',method)]],
-                      newdata=df, na.action=na.pass) %>%
-              as.vector()
-      temp <- pROC::roc(Status ~ p, data=df)
-      AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, Training='Full', method=method, AUC=pROC::auc(temp) ) )
+for(method in c('LASSO', 'Ridge', 'HCP1')){
+  for(type in c('IgM', 'IgG', 'IgGM')){
+    if( type %in% c('IgM', 'IgG') ){
+      df <- NHP_BurkPx_test1 %>%
+        filter(Type == type) %>% #filter(TimeGroup %in% c('Healthy', time)) %>%
+        spread(Antigen, Value) %>%
+        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+        group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
+    }else{
+      df <- NHP_BurkPx_test1 %>%
+        group_by(PatientID, Type, Rep) %>%
+        unite( 'Antigen', Type, Antigen ) %>%
+        #filter(TimeGroup %in% c('Healthy', time)) %>%
+        spread(Antigen, Value) %>%
+        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+        group_by() %>% select(-PatientID, -TimeGroup, -Rep)
     }
+    
+    df$p <- predict(models[[str_c('NHP_Training1_',type,'_',method)]], 
+                    newdata=df, na.action = na.pass) %>% 
+      as.vector()
+    temp <- pROC::roc(Status ~ p, data=df)
+    AUC_results <- AUC_results %>%
+      rbind( data.frame(Type = type, Training='Training', method=method, AUC=pROC::auc(temp) ) )
+    
+    df$p <- predict(models[[str_c('NHP_Full1_',type,'_',method)]],
+                    newdata=df, na.action=na.pass) %>%
+      as.vector()
+    temp <- pROC::roc(Status ~ p, data=df)
+    AUC_results <- AUC_results %>%
+      rbind( data.frame(Type = type, Training='Full', method=method, AUC=pROC::auc(temp) ) )
   }
+}
 ```
-
-
-```{r, NHP_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
+```{r, NHP_V1_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
 ggplot(AUC_results, aes(x=Type, y=AUC, color=method)) +
-  facet_grid(Training ~ .) + 
+  facet_grid( . ~ Training ) + 
   geom_point() + 
   geom_line(aes(x=as.numeric(Type))) 
   #theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
@@ -230,3 +230,91 @@ did quite well in predicting the testing set with AUC values in the 90s.  Howeve
 with both the test and training sets (aka "Full" data), did a better job predicting the testing set,
 as we would expect. Notably, there isn't a huge difference in prediction capabilities and, unlike
 the human data, we see that the IgM serum is better at prediction than the IgG.
+
+
+
+
+
+## NHP Version 2
+```{r, echo=FALSE}
+out <- NHP_BurkPx_train2 %>%
+  group_by(PatientID, Origin, Status) %>% count() %>%
+  group_by(Origin, Status) %>% count() %>%
+  mutate(Type = 'Training' )
+
+out <- rbind(out, 
+  NHP_BurkPx_test2 %>%
+  group_by(PatientID, Origin, Status) %>% count() %>%
+  group_by(Origin, Status) %>% count() %>%
+  mutate(Type = 'Test' ))  
+
+out %>%
+  pander::pander()
+```
+
+We next look at the AUC values for the Testing set based on either the model trained on just the training set vs the model trained on the full Version 1 dataset. Because we would expect the model trained on the test data would perform well on the test set, we should only draw conclusions from the model built from the training set. The only reason the model built from the full dataset exists is to be able to use it on future data. I show these results here just to verify that the full model doesn't do worse than the training model. 
+```{r, NHP_V2_ROC_Calculation, echo=FALSE}
+#################################################
+##            ROC for each model               ##
+#################################################
+time = 'Week1'
+method = 'LASSO'
+type = 'IgG'
+
+AUC_results <- NULL
+for(method in c('LASSO', 'Ridge', 'HCP1')){
+  for(type in c('IgM', 'IgG', 'IgGM')){
+    if( type %in% c('IgM', 'IgG') ){
+      df <- NHP_BurkPx_test2 %>%
+        filter(Type == type) %>% #filter(TimeGroup %in% c('Healthy', time)) %>%
+        spread(Antigen, Value) %>%
+        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+        group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
+    }else{
+      df <- NHP_BurkPx_test2 %>%
+        group_by(PatientID, Type, Rep) %>%
+        unite( 'Antigen', Type, Antigen ) %>%
+        #filter(TimeGroup %in% c('Healthy', time)) %>%
+        spread(Antigen, Value) %>%
+        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+        group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+    }
+    
+    df$p <- predict(models[[str_c('NHP_Training2_',type,'_',method)]], 
+                    newdata=df, na.action = na.pass) %>% 
+      as.vector()
+    temp <- pROC::roc(Status ~ p, data=df)
+    AUC_results <- AUC_results %>%
+      rbind( data.frame(Type = type, Training='Training', method=method, AUC=pROC::auc(temp) ) )
+    
+    df$p <- predict(models[[str_c('NHP_Full2_',type,'_',method)]],
+                    newdata=df, na.action=na.pass) %>%
+      as.vector()
+    temp <- pROC::roc(Status ~ p, data=df)
+    AUC_results <- AUC_results %>%
+      rbind( data.frame(Type = type, Training='Full', method=method, AUC=pROC::auc(temp) ) )
+  }
+}
+```
+```{r, NHP_V2_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
+ggplot(AUC_results, aes(x=Type, y=AUC, color=method)) +
+  facet_grid( . ~ Training ) + 
+  geom_point() + 
+  geom_line(aes(x=as.numeric(Type))) 
+  #theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
+```
+
+For the Non-human primates, we see that the models that were trained on only the training data still
+did quite well in predicting the testing set with AUC values in the 90s.  However the models trained
+with both the test and training sets (aka "Full" data), did a better job predicting the testing set,
+as we would expect. Notably, there isn't a huge difference in prediction capabilities and, unlike
+the human data, we see that the IgGM combination of serums is better at prediction than the IgG serum.
+
+## What happens as we decrease the number of covariates.
+```{r, echo=FALSE, fig.height=6.5}
+par(mfrow=c(3,1))
+plot(models$NHP_Full2_IgGM_LASSO, main='IgGM \n')
+plot(models$NHP_Full2_IgG_LASSO, main='IgG \n')
+plot(models$NHP_Full2_IgM_LASSO, main='IgM \n')
+```
+Because of the reduced sample size compared to the Human models, the NHP models were fitted by minimizing the binomial deviance instead of AUC.
