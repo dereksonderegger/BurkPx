@@ -1,7 +1,7 @@
 Package: BurkPx
 Type: Package
 Title: Burkholderia Assay
-Version: 0.2.2
+Version: 0.2.3
 Author: Derek Sonderegger
 Maintainer: Derek Sonderegger <derek.sonderegger@nau.edu>
 Description: Burkholderia is pathogenic bacteria which causes the disease melioidosis. 
