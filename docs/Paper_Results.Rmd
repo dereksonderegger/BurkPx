@@ -1,0 +1,73 @@
+---
+title: "Human Paper"
+author: "Derek Sonderegger"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+library(BurkPx)
+library(tidyverse)
+library(broom)
+```
+
+Assess the individual antigens
+```{r, warning=FALSE}
+# model_name <- 'Human_BurkPx'
+# model_name <- 'NHP_BurkPx'
+# antigen <- Antigens[2]
+output <- NULL
+
+for( model_name in c('Human_BurkPx', 'NHP_BurkPx')){
+  test <- get(str_c(model_name, '_test'))   %>% ungroup()
+  train <- get(str_c(model_name, '_train')) %>% ungroup()
+  Antigens <- unique(test$Antigen)
+  for( type in c('IgG', 'IgM', 'IgGM') ){
+    for( antigen in Antigens ){
+      test1  <- test  %>% filter(Antigen == antigen, Type == type)
+      train1 <- train %>% filter(Antigen == antigen, Type == Type)
+      
+      if( nrow(test1) > 0 & nrow(train1)>0 ){
+        model <- glm( Status ~ Value, data=train1, family='binomial' )
+        test1 <- test1 %>% mutate( phat = predict( model, newdata=test1) )
+        AUC <-  pROC::roc(Status ~ phat, data=test1) %>% magrittr::extract2('auc')
+      
+        output <- data.frame( model = model_name, Type = type, Antigen=antigen, AUC = AUC ) %>% rbind(output, .)  
+      }
+    }
+  }
+}
+output %>% arrange(desc(AUC))
+```
+
+
+```{r}
+output %>% 
+  group_by(model, Type) %>% arrange(desc(AUC)) %>% 
+  slice(1:5) %>% pander::pander()
+```
+
+
+```{r, results='asis'}
+library(expss)
+data(mtcars)
+mtcars = apply_labels(mtcars,
+                      mpg = "Miles/(US) gallon",
+                      cyl = "Number of cylinders",
+                      disp = "Displacement (cu.in.)",
+                      hp = "Gross horsepower",
+                      drat = "Rear axle ratio",
+                      wt = "Weight (1000 lbs)",
+                      qsec = "1/4 mile time",
+                      vs = "Engine",
+                      vs = c("V-engine" = 0,
+                             "Straight engine" = 1),
+                      am = "Transmission",
+                      am = c("Automatic" = 0,
+                             "Manual"=1),
+                      gear = "Number of forward gears",
+                      carb = "Number of carburetors"
+)
+cro(mtcars$am, mtcars$vs)
+```
+
