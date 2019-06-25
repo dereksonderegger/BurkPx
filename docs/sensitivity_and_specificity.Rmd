@@ -88,12 +88,80 @@ ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
   geom_point() + 
   geom_line(aes(x=as.numeric(TimeGroup))) +
   theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
-  labs(title='AUC values: Human Models')
+  labs(title='AUC values: Human Models trained on all timepoints')
 ```
 
 The graph columns denote the serum type and the graph rows represent which dataset the model was trained on. The training row was trained on the training set and tested on the test set. However the full row has models built using both the training and test sets and then challenged by the test set.  
 
 From this analysis, it is clear that for the first week, we need both the IgG and IgM sereologies. It also seems that the LASSO might be working better than Ridge Regression and that IgG is working better than IgM. However the best performance is by the IgGM data which uses both IgG and IgM observation values. 
+
+Next we look at the human models that were trained on only the Week 1 and 2 data. We compare the models against the same version 1 test set so that the comparisons
+
+```{r, Human_ROC_Calculation2, echo=FALSE}
+#################################################
+##            ROC for each model               ##
+#################################################
+time = 'Week1'
+method = 'LASSO'
+type = 'IgG'
+
+AUC_results <- NULL
+for(time in c('Week1','Week2','Week3', 'Week4+')){
+  for(method in c('LASSO', 'Ridge', 'HCP1')){
+    for(type in c('IgM', 'IgG', 'IgGM')){
+      if( type %in% c('IgM', 'IgG') ){
+        df <- Human_BurkPx_test %>%
+          filter(Type == type) %>% filter(TimeGroup %in% c('Healthy', time)) %>%
+          spread(Antigen, Value) %>%
+          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+          group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
+      }else{
+        df <- Human_BurkPx_test %>%
+          group_by(PatientID, Type, Rep) %>%
+          unite( 'Antigen', Type, Antigen ) %>%
+          filter(TimeGroup %in% c('Healthy', time)) %>%
+          spread(Antigen, Value) %>%
+          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
+          group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+      }
+
+      df$p <- predict(models[[str_c('Human_Training2_',type,'_',method)]], 
+                      newdata=df, na.action = na.pass) %>% 
+              as.vector()
+      temp <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)},
+                       error=function(err){NA}, warning=function(war){NA})
+      AUC_results <- AUC_results %>%
+        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                          Train = 'Training', AUC=temp ) )
+      
+      df$p <- predict(models[[str_c('Human_Full2_',type,'_',method)]],
+                      newdata=df, na.action=na.pass) %>%
+              as.vector()
+      temp <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)},
+                       error=function(err){NA}, warning=function(war){NA})
+      AUC_results <- AUC_results %>%
+        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                          Train = 'Full', AUC=temp ) )
+    }
+  }
+}
+```
+
+```{r, Human_ROC_Display2, fig.height=2.5, fig.width=6, echo=FALSE}
+ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
+  facet_grid(Train ~ Type) + 
+  geom_point() + 
+  geom_line(aes(x=as.numeric(TimeGroup))) +
+  theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
+  labs(title='AUC values: Human Models trained on Week 1 and 2')
+```
+
+
+
+
+
+
+
 
 
 
@@ -103,7 +171,7 @@ For each of the full LASSO models, it would be helpful to know which antigens wh
 #### IgG
 ```{r, echo=FALSE}
 # Which covariates are used in the IgG LASSO model?
-temp <- coef( models$Human_Full_IgG_LASSO ) 
+temp <- coef( models$Human_Full2_IgG_LASSO ) 
 data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
   filter(Antigen != '(Intercept)', Coef != 0 ) %>%
   pander::pander()
@@ -112,7 +180,7 @@ data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
 #### IgM
 ```{r, echo=FALSE}
 # Which covariates are used in the IgM LASSO model?
-temp <- coef( models$Human_Full_IgM_LASSO ) 
+temp <- coef( models$Human_Full2_IgM_LASSO ) 
 data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
   filter(Antigen != '(Intercept)', Coef != 0 ) %>%
   pander::pander()
@@ -121,7 +189,7 @@ data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
 #### IgGM
 ```{r, echo=FALSE}
 # Which covariates are used in the IgGM LASSO model?
-temp <- coef( models$Human_Full_IgGM_LASSO ) 
+temp <- coef( models$Human_Full2_IgGM_LASSO ) 
 data.frame(Antigen=rownames(temp), Coef=as.vector(temp)) %>%
   filter(Antigen != '(Intercept)', Coef != 0 ) %>%
   pander::pander()
