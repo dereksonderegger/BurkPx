@@ -27,7 +27,7 @@ Human_BurkPx <- rbind(
 ```
 
 
-```{r, echo=FALSE, warning=FALSE}
+```{r, echo=FALSE, warning=FALSE, cache=TRUE}
 # For a given data frame for a particular antigen: 
 #   1. Make a model using the training observations
 #   2. Confront it with the test observations
@@ -35,109 +35,135 @@ Human_BurkPx <- rbind(
 #   4. Do a bootstrap procedure so as to get a 95% CI for the AUC
 
 #df <- Human_BurkPx %>% filter(Antigen == 'LPSA', Type == 'IgG')
-ind_model <- function(df){
-  AUC <- tryCatch({
-    model <- glm( Status=='Melioid' ~ Value,  family=binomial,
-                data = df %>% filter(Set=='Train'))
-  
-    df %>% add_predictions(model, type='response') %>%
-      filter( Set == 'Test' ) %>%
-      pROC::roc(Status=='Melioid' ~ pred, data=.) %>% 
-      magrittr::extract2('auc') %>% as.numeric()
-  }, 
-  error=function(err){NA}, warning=function(war){NA})
-  
-  return(AUC)
+Results <- NULL
+for( type in c('IgG', 'IgM') ){
+  for( antigen in unique(Human_BurkPx$Antigen) ){
+    for( timeGroup in c('Week1', 'Week2', 'Week3', 'Week4') ){
+      for( rep in 1:40 ){
+    
+        train <- Human_BurkPx_train %>% filter( Antigen == antigen ) %>%
+          filter( TimeGroup %in% c('Prior','Healthy','Week1','Week2') ) 
+        test <- Human_BurkPx_test %>% filter( Antigen == antigen ) %>%
+          filter( TimeGroup %in% c('Prior','Healthy', timeGroup) ) %>%
+          sample_frac(1, replace = TRUE)
+    
+        auc <- tryCatch({
+          model <- glm( Status=='Melioid' ~ Value,  family=binomial,
+                      data = train )
+      
+          test %>% add_predictions(model, type='response') %>%
+            pROC::roc(Status=='Melioid' ~ pred, data=.) %>% 
+            magrittr::extract2('auc') %>% as.numeric()
+        },  
+        error=function(err){NA}, warning=function(war){NA})
+    
+        Results <- rbind(Results, data.frame(Type = type, Antigen = antigen, TimeGroup = timeGroup, rep=rep, AUC = auc))
+        
+      }
+    }
+  }
 }
 
 
-# Now actually do the work for each antigen!
-Results <- rbind(
-  Human_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week1') ) %>% mutate(TimeGroup = 'Week1'),
-  Human_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week2') ) %>% mutate(TimeGroup = 'Week2'),
-  Human_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week3') ) %>% mutate(TimeGroup = 'Week3'),
-  Human_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week4') ) %>% mutate(TimeGroup = 'Week4') ) %>%
-  group_by(Type, Antigen, TimeGroup) %>% 
-  nest() %>% 
-  mutate( AUC = map(data, ind_model) ) %>%
-  select(-data) %>% unnest(AUC)
+
 ```
 
 
+## Human Single Antigen Predictors
 For the human test/training data sets, we fit a model using only a single antigen on the training set (which included all the negatives but only positives from that time point) and then calculated the AUC values using the corresponding test set. The following table gives the top 10 antigens for the IgG and IgM serum AUC values.
 ```{r, echo=FALSE}
 # Print out a nice looking table that shows the best antigens.
-Results %>%  
+Results %>% 
+  group_by(Type, Antigen, TimeGroup) %>%
+  summarize( lwr=quantile(AUC,.025, na.rm=TRUE), upr=quantile(AUC,.975, na.rm=TRUE), AUC=mean(AUC, na.rm=TRUE) ) %>% 
+  mutate( AUC_string = str_c(round(AUC,3), ' (',round(lwr,3),',',round(upr,3),')') ) %>%
   filter( Type == 'IgG' ) %>%
-  spread(TimeGroup, AUC) %>%
-  mutate( best = select(., starts_with('Week')) %>% apply(1, mean, na.rm=TRUE) ) %>%
-  arrange(desc(best)) %>% select(-best) %>%
-  slice(1:10) %>%
+  select(-lwr, -upr, -AUC) %>%
+  spread(TimeGroup, AUC_string) %>%
+  mutate( best = Week1 %>% str_sub(1, 5) %>% as.numeric() ) %>%
+  arrange(desc(best)) %>% select(-best) %>% 
+  group_by() %>% slice(1:10) %>%
   pander::pander()
 
 Results %>%  
+  group_by(Type, Antigen, TimeGroup) %>%
+  summarize( lwr=quantile(AUC,.025, na.rm=TRUE), upr=quantile(AUC,.975, na.rm=TRUE), AUC=mean(AUC, na.rm=TRUE) ) %>% 
+  mutate( AUC_string = str_c(round(AUC,3), ' (',round(lwr,3),',',round(upr,3),')') ) %>%
   filter( Type == 'IgM' ) %>%
-  spread(TimeGroup, AUC) %>%
-  mutate( best = select(., starts_with('Week')) %>% apply(1, mean, na.rm=TRUE) ) %>%
-  arrange(desc(best)) %>% select(-best) %>%
-  slice(1:10) %>%
+  select(-lwr, -upr, -AUC) %>%
+  spread(TimeGroup, AUC_string) %>%
+  mutate( best = Week1 %>% str_sub(1, 5) %>% as.numeric() ) %>%
+  arrange(desc(best)) %>% select(-best) %>% 
+  group_by() %>% slice(1:10) %>%
   pander::pander()
 ```
 
 
+## Nonhuman Primates - Single Antigen Predictors
 
 For the non-human primates we do something similar, and we utilize the NHP version 2 datasets. Here the single antigen model 
-```{r}
+```{r, echo=FALSE, cache=TRUE}
 data('NHP_BurkPx_train2', package='BurkPx')
 data('NHP_BurkPx_test2',  package='BurkPx')
 
-# Make one data frame that has both the test and training observations
-NHP_BurkPx <- rbind( 
-  NHP_BurkPx_test  %>% mutate(Set = 'Test'),
-  NHP_BurkPx_train %>% mutate(Set = 'Train') )
 
 # Now actually do the work for each antigen!
-NHP_Results <- rbind(
-  NHP_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week1') ) %>% mutate(TimeGroup = 'Week1'),
-  NHP_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week2') ) %>% mutate(TimeGroup = 'Week2'),
-  NHP_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week3') ) %>% mutate(TimeGroup = 'Week3'),
-  NHP_BurkPx %>% group_by(Type, Antigen) %>% filter( TimeGroup %in% c('Prior', 'Healthy', 'Week4+') ) %>% mutate(TimeGroup = 'Week4+') ) %>%
-  group_by(Type, Antigen, TimeGroup) %>% 
-  nest() %>% 
-  mutate( AUC = map(data, ind_model) ) %>%
-  select(-data) %>% unnest(AUC)
+NHP_Results <- NULL
+for( type in c('IgG', 'IgM') ){
+  for( antigen in unique(NHP_BurkPx2$Antigen) ){
+    for( timeGroup in c('Week1', 'Week2', 'Week3', 'Week4') ){
+    
+      train <- NHP_BurkPx_train2 %>% filter( Antigen == antigen ) %>%
+        filter( TimeGroup %in% c('Prior','Healthy','Week1','Week2') ) 
+      test <- NHP_BurkPx_test2 %>% filter( Antigen == antigen ) %>%
+        filter( TimeGroup %in% c('Prior','Healthy', timeGroup) )
+  
+      auc <- tryCatch({
+        model <- glm( Status=='Melioid' ~ Value,  family=binomial,
+                    data = train )
+    
+        test %>% add_predictions(model, type='response') %>%
+          pROC::roc(Status=='Melioid' ~ pred, data=.) %>% 
+          magrittr::extract2('auc') %>% as.numeric()
+      },  
+      error=function(err){NA}, warning=function(war){NA})
+  
+      NHP_Results <- rbind(NHP_Results, data.frame(Type = type, Antigen = antigen, TimeGroup = timeGroup, AUC = auc))
+    }
+  }
+}
+
 
 ```
 
 
 
-```{r}
-NHP_Results %>%  
+```{r, echo=FALSE}
+
+NHP_Results %>%
+  group_by(Type, Antigen, TimeGroup) %>%
+  summarize( lwr=quantile(AUC,.025, na.rm=TRUE), upr=quantile(AUC,.975, na.rm=TRUE), AUC=mean(AUC, na.rm=TRUE) ) %>% 
+  mutate( AUC_string = str_c(round(AUC,3), ' (',round(lwr,3),',',round(upr,3),')') ) %>%
   filter( Type == 'IgG' ) %>%
-  spread(TimeGroup, AUC) %>% #group_by(Antigen) %>%
-  mutate( best = select(., starts_with('Week')) %>% apply(1, mean, na.rm=TRUE) ) %>%
-  arrange(desc(best)) %>% select(-best) %>%
-  slice(1:10) %>%
+  select(-lwr, -upr, -AUC) %>%
+  spread(TimeGroup, AUC_string) %>%
+  mutate( best = Week1 %>% str_sub(1, 5) %>% as.numeric() ) %>%
+  arrange(desc(best)) %>% select(-best) %>%  
+  group_by() %>% slice(1:10) %>%
   pander::pander()
 
-NHP_Results %>%  
+NHP_Results %>%
+  group_by(Type, Antigen, TimeGroup) %>%
+  summarize( lwr=quantile(AUC,.025, na.rm=TRUE), upr=quantile(AUC,.975, na.rm=TRUE), AUC=mean(AUC, na.rm=TRUE) ) %>% 
+  mutate( AUC_string = str_c(round(AUC,3), ' (',round(lwr,3),',',round(upr,3),')') ) %>%
   filter( Type == 'IgM' ) %>%
-  spread(TimeGroup, AUC) %>%
-  mutate( best = select(., starts_with('Week')) %>% apply(1, mean, na.rm=TRUE) ) %>%
-  arrange(desc(best)) %>% select(-best) %>%
-  slice(1:10) %>%
+  select(-lwr, -upr, -AUC) %>%
+  spread(TimeGroup, AUC_string) %>%
+  mutate( best = Week1 %>% str_sub(1, 5) %>% as.numeric() ) %>%
+  arrange(desc(best)) %>% select(-best) %>%  
+  group_by() %>% slice(1:10) %>%
   pander::pander()
 
-
 ```
 
-```{r}
-# Also make these stratified by time so that we see AUC week1, week2, etc...
-
-# They have IgA saliva data.  We want to test how well the multivariate serum models perform for the saliva.  Questionable, but worth a shot.
-# 
-# For NHP make a version 3 - No day 1-6 animals in test/training.
-# For Humans, make a version 2 - do just positives 0-2 weeks
-# 
-```
 

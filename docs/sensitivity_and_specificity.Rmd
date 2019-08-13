@@ -34,7 +34,7 @@ Once the patients have been assigned to either the test or training set, all of 
 For the human data, we generated AUC values for each week after the patient was admitted to the hospital. To generate this by week, we split the testing data into Healthy, Week 1, Week 2, etc. For each, we calculate AUC using the three different human models (IgG, IgM, IgGM). 
 
 
-```{r, Human_ROC_Calculation, echo=FALSE}
+```{r, Human_ROC_Calculation, echo=FALSE, cache=TRUE}
 #################################################
 ##            ROC for each model               ##
 #################################################
@@ -46,46 +46,52 @@ AUC_results <- NULL
 for(time in c('Week1','Week2','Week3', 'Week4+')){
   for(method in c('LASSO', 'Ridge', 'HCP1')){
     for(type in c('IgM', 'IgG', 'IgGM')){
-      if( type %in% c('IgM', 'IgG') ){
-        df <- Human_BurkPx_test %>%
-          filter(Type == type) %>% filter(TimeGroup %in% c('Healthy', time)) %>%
-          spread(Antigen, Value) %>%
-          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-          group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
-      }else{
-        df <- Human_BurkPx_test %>%
-          group_by(PatientID, Type, Rep) %>%
-          unite( 'Antigen', Type, Antigen ) %>%
-          filter(TimeGroup %in% c('Healthy', time)) %>%
-          spread(Antigen, Value) %>%
-          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-          group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+      for(rep in 1:40){
+        if( type %in% c('IgM', 'IgG') ){
+          df <- Human_BurkPx_test %>%
+            filter(Type == type) %>% filter(TimeGroup %in% c('Healthy', time)) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete() %>%
+            sample_frac(1, replace = TRUE)
+        }else{
+          df <- Human_BurkPx_test %>%
+            group_by(PatientID, Type, Rep) %>%
+            unite( 'Antigen', Type, Antigen ) %>%
+            filter(TimeGroup %in% c('Healthy', time)) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -TimeGroup, -Rep) %>%
+            sample_frac(1, replace = TRUE)
+        }
+  
+        df$p <- predict(models[[str_c('Human_Training_',type,'_',method)]], 
+                        newdata=df, na.action = na.pass) %>% 
+                as.vector()
+        temp <- pROC::roc(Status ~ p, data=df)
+        AUC_results <- AUC_results %>%
+          rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                            Train = 'Training', rep=rep, AUC=pROC::auc(temp) ) )
+        
+        df$p <- predict(models[[str_c('Human_Full_',type,'_',method)]],
+                        newdata=df, na.action=na.pass) %>%
+                as.vector()
+        temp <- pROC::roc(Status ~ p, data=df)
+        AUC_results <- AUC_results %>%
+          rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                            Train = 'Full', rep = rep, AUC=pROC::auc(temp) ) )
       }
-
-      df$p <- predict(models[[str_c('Human_Training_',type,'_',method)]], 
-                      newdata=df, na.action = na.pass) %>% 
-              as.vector()
-      temp <- pROC::roc(Status ~ p, data=df)
-      AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
-                          Train = 'Training', AUC=pROC::auc(temp) ) )
-      
-      df$p <- predict(models[[str_c('Human_Full_',type,'_',method)]],
-                      newdata=df, na.action=na.pass) %>%
-              as.vector()
-      temp <- pROC::roc(Status ~ p, data=df)
-      AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
-                          Train = 'Full', AUC=pROC::auc(temp) ) )
     }
   }
 }
 ```
 
-```{r, Human_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
-ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
+```{r, Human_ROC_Display, fig.height=3.5, fig.width=6, echo=FALSE}
+AUC_results %>%
+  group_by( Type, TimeGroup, method, Train ) %>%
+  summarise( lwr = quantile(AUC, .025), upr = quantile(AUC, .95), AUC = mean(AUC) ) %>%
+  filter(method != 'HCP1') %>%
+ggplot(., aes(x=TimeGroup, y=AUC, color=method)) +
   facet_grid(Train ~ Type) + 
-  geom_point() + 
+  geom_point() + geom_errorbar( aes(ymin=lwr, ymax=upr), width=.3) +
   geom_line(aes(x=as.numeric(TimeGroup))) +
   theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
   labs(title='AUC values: Human Models trained on all timepoints')
@@ -97,7 +103,7 @@ From this analysis, it is clear that for the first week, we need both the IgG an
 
 Next we look at the human models that were trained on only the Week 1 and 2 data. We compare the models against the same version 1 test set so that the comparisons
 
-```{r, Human_ROC_Calculation2, echo=FALSE}
+```{r, Human_ROC_Calculation2, echo=FALSE, cache=TRUE}
 #################################################
 ##            ROC for each model               ##
 #################################################
@@ -105,52 +111,60 @@ time = 'Week1'
 method = 'LASSO'
 type = 'IgG'
 
-AUC_results <- NULL
+AUC_results2 <- NULL
 for(time in c('Week1','Week2','Week3', 'Week4+')){
   for(method in c('LASSO', 'Ridge', 'HCP1')){
     for(type in c('IgM', 'IgG', 'IgGM')){
-      if( type %in% c('IgM', 'IgG') ){
-        df <- Human_BurkPx_test %>%
-          filter(Type == type) %>% filter(TimeGroup %in% c('Healthy', time)) %>%
-          spread(Antigen, Value) %>%
-          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-          group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
-      }else{
-        df <- Human_BurkPx_test %>%
-          group_by(PatientID, Type, Rep) %>%
-          unite( 'Antigen', Type, Antigen ) %>%
-          filter(TimeGroup %in% c('Healthy', time)) %>%
-          spread(Antigen, Value) %>%
-          # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-          group_by() %>% select(-PatientID, -TimeGroup, -Rep)
-      }
+      for( rep in 1:40 ){
 
-      df$p <- predict(models[[str_c('Human_Training2_',type,'_',method)]], 
-                      newdata=df, na.action = na.pass) %>% 
-              as.vector()
-      temp <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)},
-                       error=function(err){NA}, warning=function(war){NA})
-      AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
-                          Train = 'Training', AUC=temp ) )
-      
-      df$p <- predict(models[[str_c('Human_Full2_',type,'_',method)]],
-                      newdata=df, na.action=na.pass) %>%
-              as.vector()
-      temp <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)},
-                       error=function(err){NA}, warning=function(war){NA})
-      AUC_results <- AUC_results %>%
-        rbind( data.frame(Type = type, TimeGroup=time, method=method, 
-                          Train = 'Full', AUC=temp ) )
+        if( type %in% c('IgM', 'IgG') ){
+          df <- Human_BurkPx_test %>%
+            filter(Type == type) %>% filter(TimeGroup %in% c('Healthy', time)) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete() %>%
+            sample_frac(1, replace = TRUE)
+        }else{
+          df <- Human_BurkPx_test %>%
+            group_by(PatientID, Type, Rep) %>%
+            unite( 'Antigen', Type, Antigen ) %>%
+            filter(TimeGroup %in% c('Healthy', time)) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -TimeGroup, -Rep) %>%
+            sample_frac(1, replace = TRUE)
+        }
+  
+        df$p <- predict(models[[str_c('Human_Training2_',type,'_',method)]], 
+                        newdata=df, na.action = na.pass) %>% 
+                as.vector()
+        temp <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)},
+                         error=function(err){NA}, warning=function(war){NA})
+        AUC_results2 <- AUC_results2 %>%
+          rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                            Train = 'Training', rep = rep, AUC=temp ) )
+        
+        df$p <- predict(models[[str_c('Human_Full2_',type,'_',method)]],
+                        newdata=df, na.action=na.pass) %>%
+                as.vector()
+        temp <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)},
+                         error=function(err){NA}, warning=function(war){NA})
+        AUC_results2 <- AUC_results2 %>%
+          rbind( data.frame(Type = type, TimeGroup=time, method=method, 
+                            Train = 'Full', rep = rep, AUC=temp ) )
+      }
     }
   }
 }
 ```
 
-```{r, Human_ROC_Display2, fig.height=2.5, fig.width=6, echo=FALSE}
-ggplot(AUC_results, aes(x=TimeGroup, y=AUC, color=method)) +
+```{r, Human_ROC_Display2, fig.height=3.5, fig.width=6, echo=FALSE}
+AUC_results2 %>%
+  group_by( Type, TimeGroup, method, Train ) %>%
+  summarise( lwr = quantile(AUC, .025), upr = quantile(AUC, .95), AUC = mean(AUC) ) %>%
+  filter(method != 'HCP1') %>%
+ggplot(., aes(x=TimeGroup, y=AUC, color=method)) +
   facet_grid(Train ~ Type) + 
-  geom_point() + 
+  geom_point() +
+  geom_errorbar(aes(ymin=lwr, ymax=upr), width=.3) +
   geom_line(aes(x=as.numeric(TimeGroup))) +
   theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
   labs(title='AUC values: Human Models trained on Week 1 and 2')
@@ -251,46 +265,49 @@ method = 'LASSO'
 type = 'IgG'
 
 AUC_results <- NULL
-for(method in c('LASSO', 'Ridge', 'HCP1')){
-  for(type in c('IgM', 'IgG', 'IgGM')){
-    if( type %in% c('IgM', 'IgG') ){
-      df <- NHP_BurkPx_test1 %>%
-        filter(Type == type) %>% #filter(TimeGroup %in% c('Healthy', time)) %>%
-        spread(Antigen, Value) %>%
-        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-        group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
-    }else{
-      df <- NHP_BurkPx_test1 %>%
-        group_by(PatientID, Type, Rep) %>%
-        unite( 'Antigen', Type, Antigen ) %>%
-        #filter(TimeGroup %in% c('Healthy', time)) %>%
-        spread(Antigen, Value) %>%
-        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-        group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+for(time in c('Week1','Week2','Week3', 'Week4+')){
+  for(method in c('LASSO', 'Ridge', 'HCP1')){
+    for(type in c('IgM', 'IgG', 'IgGM')){
+      for( rep in 1:40 ){
+        if( type %in% c('IgM', 'IgG') ){
+          df <- NHP_BurkPx_test1 %>%
+            filter(Type == type) %>% filter(TimeGroup %in% c('Healthy','Prior', time)) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete() %>%
+            sample_frac(1, replace = TRUE)
+        }else{
+          df <- NHP_BurkPx_test1 %>%
+            group_by(PatientID, Type, Rep) %>%
+            unite( 'Antigen', Type, Antigen ) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -TimeGroup, -Rep) %>% complete() %>%
+            sample_frac(1, replace = TRUE)
+        }
+        
+        df$p <- predict(models[[str_c('NHP_Training1_',type,'_',method)]], newdata=df, na.action = na.pass) %>% as.vector()
+        AUC <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)}, error=function(err){NA} )
+        AUC_results <- AUC_results %>% rbind( data.frame(Type = type, TimeGroup = time, Training='Training', method=method, rep=rep, AUC=AUC ) )
+        
+        df$p <- predict(models[[str_c('NHP_Full1_',type,'_',method)]], newdata=df, na.action=na.pass) %>% as.vector()
+        AUC <- tryCatch({pROC::roc(Status ~ p, data=df) %>% pROC::auc(.)}, error=function(err){NA} )
+        AUC_results <- AUC_results %>% rbind( data.frame(Type = type, TimeGroup = time, Training='Full', method=method, rep=rep, AUC=AUC) ) 
+      }
     }
-    
-    df$p <- predict(models[[str_c('NHP_Training1_',type,'_',method)]], 
-                    newdata=df, na.action = na.pass) %>% 
-      as.vector()
-    temp <- pROC::roc(Status ~ p, data=df)
-    AUC_results <- AUC_results %>%
-      rbind( data.frame(Type = type, Training='Training', method=method, AUC=pROC::auc(temp) ) )
-    
-    df$p <- predict(models[[str_c('NHP_Full1_',type,'_',method)]],
-                    newdata=df, na.action=na.pass) %>%
-      as.vector()
-    temp <- pROC::roc(Status ~ p, data=df)
-    AUC_results <- AUC_results %>%
-      rbind( data.frame(Type = type, Training='Full', method=method, AUC=pROC::auc(temp) ) )
   }
 }
 ```
-```{r, NHP_V1_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
-ggplot(AUC_results, aes(x=Type, y=AUC, color=method)) +
-  facet_grid( . ~ Training ) + 
-  geom_point() + 
-  geom_line(aes(x=as.numeric(Type))) 
-  #theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
+```{r, NHP_V1_ROC_Display, fig.height=3.5, fig.width=6, echo=FALSE}
+AUC_results %>%
+  group_by( Type, TimeGroup, method, Training ) %>%
+  summarise( lwr = quantile(AUC, .025, na.rm=TRUE), upr = quantile(AUC, .95, na.rm=TRUE), AUC = mean(AUC, na.rm=TRUE) ) %>%
+  filter(method != 'HCP1') %>%
+ggplot(., aes(x=TimeGroup, y=AUC, color=method)) +
+  facet_grid( Training ~ Type ) + 
+  geom_point() +
+  geom_errorbar(aes(ymin=lwr, ymax=upr), width=.3) +
+  geom_line(aes(x=as.numeric(TimeGroup))) +
+  theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
+  labs(title='AUC values: NHP Models trained on all Time points')
 ```
 
 For the Non-human primates, we see that the models that were trained on only the training data still
@@ -303,15 +320,15 @@ the human data, we see that the IgM serum is better at prediction than the IgG.
 
 
 
-## NHP Version 2
+## NHP Version 3
 ```{r, echo=FALSE}
-out <- NHP_BurkPx_train2 %>%
+out <- NHP_BurkPx_train3 %>%
   group_by(PatientID, Origin, Status) %>% count() %>%
   group_by(Origin, Status) %>% count() %>%
   mutate(Type = 'Training' )
 
 out <- rbind(out, 
-  NHP_BurkPx_test2 %>%
+  NHP_BurkPx_test3 %>%
   group_by(PatientID, Origin, Status) %>% count() %>%
   group_by(Origin, Status) %>% count() %>%
   mutate(Type = 'Test' ))  
@@ -321,7 +338,7 @@ out %>%
 ```
 
 We next look at the AUC values for the Testing set based on either the model trained on just the training set vs the model trained on the full Version 1 dataset. Because we would expect the model trained on the test data would perform well on the test set, we should only draw conclusions from the model built from the training set. The only reason the model built from the full dataset exists is to be able to use it on future data. I show these results here just to verify that the full model doesn't do worse than the training model. 
-```{r, NHP_V2_ROC_Calculation, echo=FALSE}
+```{r, NHP_V3_ROC_Calculation, echo=FALSE}
 #################################################
 ##            ROC for each model               ##
 #################################################
@@ -330,46 +347,53 @@ method = 'LASSO'
 type = 'IgG'
 
 AUC_results <- NULL
-for(method in c('LASSO', 'Ridge', 'HCP1')){
-  for(type in c('IgM', 'IgG', 'IgGM')){
-    if( type %in% c('IgM', 'IgG') ){
-      df <- NHP_BurkPx_test2 %>%
-        filter(Type == type) %>% #filter(TimeGroup %in% c('Healthy', time)) %>%
-        spread(Antigen, Value) %>%
-        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-        group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete()
-    }else{
-      df <- NHP_BurkPx_test2 %>%
-        group_by(PatientID, Type, Rep) %>%
-        unite( 'Antigen', Type, Antigen ) %>%
-        #filter(TimeGroup %in% c('Healthy', time)) %>%
-        spread(Antigen, Value) %>%
-        # group_by(PatientID) %>% sample_n(1) %>%  # Use only 1 replicant from each patient
-        group_by() %>% select(-PatientID, -TimeGroup, -Rep)
+for(time in c('Week1','Week2','Week3', 'Week4+')){
+  for(method in c('LASSO', 'Ridge', 'HCP1')){
+    for(type in c('IgM', 'IgG', 'IgGM')){
+      for( rep in 1:40 ){
+        if( type %in% c('IgM', 'IgG') ){
+          df <- NHP_BurkPx_test2 %>%
+            filter(Type == type) %>% filter(TimeGroup %in% c('Healthy','Prior', time)) %>%
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -SerumID, -TimeGroup, -Type, -Rep) %>% complete() %>%
+            sample_frac(1, replace = TRUE)
+        }else{
+          df <- NHP_BurkPx_test2 %>%
+            group_by(PatientID, Type, Rep) %>%
+            unite( 'Antigen', Type, Antigen ) %>%
+            filter(TimeGroup %in% c('Healthy','Prior', time)) %>%          
+            spread(Antigen, Value) %>%
+            group_by() %>% select(-PatientID, -TimeGroup, -Rep) %>%
+            sample_frac(1, replace = TRUE)
+        }
+        out <- tryCatch({
+          df$p <- predict(models[[str_c('NHP_Training3_',type,'_',method)]], newdata=df, na.action = na.pass) %>% as.vector()
+          temp <- pROC::roc(Status ~ p, data=df)
+          AUC_results <- AUC_results %>% rbind( data.frame(Type = type, TimeGroup = time, Training='Training', method=method, AUC=pROC::auc(temp) ) )
+        }, error=function(err){NULL}, warning=function(war){NULL} )
+        
+        out <- tryCatch({
+          df$p <- predict(models[[str_c('NHP_Full3_',type,'_',method)]], newdata=df, na.action=na.pass) %>% as.vector()
+          temp <- pROC::roc(Status ~ p, data=df)
+          AUC_results <- AUC_results %>% rbind( data.frame(Type = type, TimeGroup = time, Training='Full', method=method, AUC=pROC::auc(temp) ) )
+        }, error=function(err){NULL}, warning=function(war){NULL} )
+      }
     }
-    
-    df$p <- predict(models[[str_c('NHP_Training2_',type,'_',method)]], 
-                    newdata=df, na.action = na.pass) %>% 
-      as.vector()
-    temp <- pROC::roc(Status ~ p, data=df)
-    AUC_results <- AUC_results %>%
-      rbind( data.frame(Type = type, Training='Training', method=method, AUC=pROC::auc(temp) ) )
-    
-    df$p <- predict(models[[str_c('NHP_Full2_',type,'_',method)]],
-                    newdata=df, na.action=na.pass) %>%
-      as.vector()
-    temp <- pROC::roc(Status ~ p, data=df)
-    AUC_results <- AUC_results %>%
-      rbind( data.frame(Type = type, Training='Full', method=method, AUC=pROC::auc(temp) ) )
   }
 }
 ```
-```{r, NHP_V2_ROC_Display, fig.height=2.5, fig.width=6, echo=FALSE}
-ggplot(AUC_results, aes(x=Type, y=AUC, color=method)) +
-  facet_grid( . ~ Training ) + 
-  geom_point() + 
-  geom_line(aes(x=as.numeric(Type))) 
-  #theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) )
+```{r, NHP_V3_ROC_Display, fig.height=3.5, fig.width=6, echo=FALSE}
+AUC_results %>%
+  group_by( Type, TimeGroup, method, Training ) %>%
+  summarise( lwr = quantile(AUC, .025, na.rm=TRUE), upr = quantile(AUC, .95, na.rm=TRUE), AUC = mean(AUC, na.rm=TRUE) ) %>%
+  filter(method != 'HCP1') %>%
+ggplot(., aes(x=TimeGroup, y=AUC, color=method)) +
+  facet_grid( Training ~ Type ) + 
+  geom_point() +
+  geom_errorbar(aes(ymin=lwr, ymax=upr), width=.3) +
+  geom_line(aes(x=as.numeric(TimeGroup))) +
+  theme(axis.text.x = element_text(angle=-45, vjust=0, hjust=.5) ) +
+  labs(title='AUC values: NHP Models trained on week 1 and 2')
 ```
 
 For the Non-human primates, we see that the models that were trained on only the training data still
